@@ -11,7 +11,7 @@ APPLY_URL = "https://www.sheinindia.in/api/cart/apply-voucher"
 RESET_URL = "https://www.sheinindia.in/api/cart/reset-voucher"
 
 _thread_local = threading.local()
-WORKERS = 5
+WORKERS = 5  # ⚡ 5 workers
 
 def load_cookies():
     try:
@@ -103,7 +103,7 @@ def check_voucher(code, is_retry=False):
     
     if r is None:
         if not is_retry:
-            return None  # Failed, will retry in bot
+            return None
         return code, False, "Failed"
     
     status = r.status_code
@@ -125,7 +125,6 @@ def check_voucher(code, is_retry=False):
     else:
         return code, False, f"Not applicable ({status})"
 
-# ========== PROCESS VOUCHERS FUNCTION ==========
 def process_vouchers(vouchers, progress_callback, valid_callback, user_id):
     print(f"\n🔥 CHECKING {len(vouchers)} VOUCHERS with {WORKERS} workers\n")
     
