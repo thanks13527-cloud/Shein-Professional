@@ -74,9 +74,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_counter = 0
         valid_counter = 0
         start_time = time.time()
-        loop = asyncio.get_running_loop()  # Store the event loop
+        loop = asyncio.get_running_loop()
         
-        # Send live status message
+        # Send live status message with stop button
         status_text = """
 ╔══════════════════════════╗
 ║     🤖 AUTO MODE ON      ║
@@ -86,18 +86,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ║ ⚡ Speed: 0/min          ║
 ╚══════════════════════════╝
         """
-        status_message = await q.message.reply_text(status_text)
         
-        await q.message.reply_text(
-            "✅ Auto mode activated!\n"
-            "I'll notify you when valid vouchers are found.\n"
-            "Use /stopauto to stop."
+        keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
+        status_message = await q.message.reply_text(
+            status_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
         def update_status():
             global auto_counter, valid_counter, status_message, start_time, auto_active, loop
             while auto_active:
-                time.sleep(2)
+                time.sleep(1)
                 if status_message and start_time:
                     elapsed = time.time() - start_time
                     speed = int(auto_counter / (elapsed / 60)) if elapsed > 0 else 0
@@ -110,8 +109,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ║ ⚡ Speed: {speed}/min          ║
 ╚══════════════════════════╝
                     """
+                    keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
                     asyncio.run_coroutine_threadsafe(
-                        status_message.edit_text(status_text),
+                        status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
                         loop
                     )
         
@@ -132,7 +132,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if result is None:
                     # Recheck failed
-                    time.sleep(2)
+                    time.sleep(1)
                     result = check_voucher(code, is_retry=True)
                 
                 if result:
@@ -149,12 +149,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     print(f"❌ Auto #{auto_counter}: {code} -> Failed")
                 
-                time.sleep(2)
+                time.sleep(1)  # ⚡ Fast delay
         
         # Start status updater thread
         threading.Thread(target=update_status, daemon=True).start()
         # Start auto check thread
         threading.Thread(target=auto_loop, daemon=True).start()
+    
+    elif q.data == "stop_auto":
+        await stopauto(update, context)
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
@@ -213,14 +216,17 @@ async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active, status_message
     auto_active = False
     if status_message:
-        await status_message.edit_text("🛑 Auto mode stopped.")
-    await update.message.reply_text(f"✅ Auto mode stopped. Total checked: {auto_counter} | Valid: {valid_counter}")
+        keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
+        await status_message.edit_text(
+            f"🛑 Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        status_message = None
 
 def main():
     print("🚀 VOUCHER BOT started...")
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stopauto", stopauto))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     app.run_polling()
