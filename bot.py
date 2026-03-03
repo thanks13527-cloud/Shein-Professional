@@ -65,31 +65,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active, auto_counter, valid_counter, status_message, start_time, loop
     global auto_thread, status_thread
     
-    q = update.callback_query
-    await q.answer()
-    
-    if q.data == "check":
-        await q.message.reply_text("📂 Upload voucher TXT file.")
-    
-    elif q.data == "auto":
-        # ========== STOP EXISTING AUTO MODE ==========
-        if auto_active:
-            auto_active = False
-            if auto_thread and auto_thread.is_alive():
-                auto_thread.join(timeout=2)
-            if status_thread and status_thread.is_alive():
-                status_thread.join(timeout=2)
-            time.sleep(1)
+    try:
+        q = update.callback_query
+        await q.answer()
         
-        # ========== RESET COUNTERS ==========
-        auto_counter = 0
-        valid_counter = 0
-        start_time = time.time()
-        loop = asyncio.get_running_loop()
-        auto_active = True
+        if q.data == "check":
+            await q.message.reply_text("📂 Upload voucher TXT file.")
+            return
         
-        # ========== SEND FRESH MESSAGE (NOT EDIT OLD ONE) ==========
-        status_text = """
+        elif q.data == "auto":
+            # Stop existing auto mode
+            if auto_active:
+                auto_active = False
+                if auto_thread and auto_thread.is_alive():
+                    auto_thread.join(timeout=2)
+                if status_thread and status_thread.is_alive():
+                    status_thread.join(timeout=2)
+                time.sleep(1)
+            
+            # Reset counters
+            auto_counter = 0
+            valid_counter = 0
+            start_time = time.time()
+            loop = asyncio.get_running_loop()
+            auto_active = True
+            
+            # Send fresh message
+            status_text = """
 ╔══════════════════════════╗
 ║     🤖 AUTO MODE ON      ║
 ╠══════════════════════════╣
@@ -97,25 +99,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ║ ✅ Valid: 0              ║
 ║ ⚡ Speed: 0/min          ║
 ╚══════════════════════════╝
-        """
-        
-        keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
-        
-        # Send new message (don't edit old one)
-        status_message = await q.message.reply_text(
-            status_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        
-        # ========== STATUS UPDATER THREAD ==========
-        def update_status():
-            global auto_counter, valid_counter, status_message, start_time, auto_active, loop
-            while auto_active:
-                time.sleep(1)
-                if status_message and start_time:
-                    elapsed = time.time() - start_time
-                    speed = int(auto_counter / (elapsed / 60)) if elapsed > 0 else 0
-                    status_text = f"""
+            """
+            
+            keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
+            status_message = await q.message.reply_text(
+                status_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
+            # Status updater thread
+            def update_status():
+                global auto_counter, valid_counter, status_message, start_time, auto_active, loop
+                while auto_active:
+                    time.sleep(1)
+                    if status_message and start_time:
+                        elapsed = time.time() - start_time
+                        speed = int(auto_counter / (elapsed / 60)) if elapsed > 0 else 0
+                        status_text = f"""
 ╔══════════════════════════╗
 ║     🤖 AUTO MODE ON      ║
 ╠══════════════════════════╣
@@ -123,138 +123,150 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ║ ✅ Valid: {valid_counter}              ║
 ║ ⚡ Speed: {speed}/min          ║
 ╚══════════════════════════╝
-                    """
-                    keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
-                            loop
-                        )
-                    except:
-                        pass
-        
-        # ========== AUTO CHECK THREAD ==========
-        def auto_loop():
-            global auto_counter, valid_counter, auto_active
-            
-            while auto_active:
-                codes = [generate_random_code() for _ in range(10)]
-                futures = []
-                for code in codes:
-                    if not auto_active:
-                        break
-                    futures.append(executor.submit(check_voucher, code))
-                
-                for future in as_completed(futures):
-                    if not auto_active:
-                        break
-                    
-                    auto_counter += 1
-                    current_count = auto_counter
-                    
-                    result = future.result()
-                    
-                    if result:
-                        c, is_valid, msg = result
-                        status = msg.split('(')[-1].rstrip(')')
-                        emoji = "✅" if is_valid else "✗"
-                        status_text = "Applicable" if is_valid else "Not applicable"
-                        
-                        print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
-                        
-                        if is_valid:
-                            valid_counter += 1
+                        """
+                        keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
+                        try:
                             asyncio.run_coroutine_threadsafe(
-                                q.message.reply_text(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})", parse_mode="Markdown"),
+                                status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
                                 loop
                             )
+                        except:
+                            pass
+            
+            # Auto check thread
+            def auto_loop():
+                global auto_counter, valid_counter, auto_active
+                
+                while auto_active:
+                    codes = [generate_random_code() for _ in range(10)]
+                    futures = []
+                    for code in codes:
+                        if not auto_active:
+                            break
+                        futures.append(executor.submit(check_voucher, code))
+                    
+                    for future in as_completed(futures):
+                        if not auto_active:
+                            break
+                        
+                        auto_counter += 1
+                        current_count = auto_counter
+                        
+                        result = future.result()
+                        
+                        if result:
+                            c, is_valid, msg = result
+                            status = msg.split('(')[-1].rstrip(')')
+                            emoji = "✅" if is_valid else "✗"
+                            status_text = "Applicable" if is_valid else "Not applicable"
+                            
+                            print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
+                            
+                            if is_valid:
+                                valid_counter += 1
+                                try:
+                                    asyncio.run_coroutine_threadsafe(
+                                        q.message.reply_text(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})", parse_mode="Markdown"),
+                                        loop
+                                    )
+                                except:
+                                    pass
+            
+            status_thread = threading.Thread(target=update_status, daemon=True)
+            auto_thread = threading.Thread(target=auto_loop, daemon=True)
+            status_thread.start()
+            auto_thread.start()
+            return
         
-        status_thread = threading.Thread(target=update_status, daemon=True)
-        auto_thread = threading.Thread(target=auto_loop, daemon=True)
-        status_thread.start()
-        auto_thread.start()
-    
-    elif q.data == "stop_auto":
-        # ========== STOP AUTO MODE ==========
-        auto_active = False
-        if auto_thread and auto_thread.is_alive():
-            auto_thread.join(timeout=2)
-        if status_thread and status_thread.is_alive():
-            status_thread.join(timeout=2)
-        time.sleep(1)
-        
-        # ========== UPDATE STOP MESSAGE ==========
-        if status_message:
-            keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
-            try:
-                await status_message.edit_text(
-                    f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except Exception as e:
-                print(f"Stop error: {e}")
+        elif q.data == "stop_auto":
+            # Stop auto mode
+            auto_active = False
+            if auto_thread and auto_thread.is_alive():
+                auto_thread.join(timeout=2)
+            if status_thread and status_thread.is_alive():
+                status_thread.join(timeout=2)
+            time.sleep(1)
+            
+            # Update stop message
+            if status_message:
+                keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
+                try:
+                    await status_message.edit_text(
+                        f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                except Exception as e:
+                    print(f"Stop error: {e}")
+            return
+            
+    except Exception as e:
+        print(f"Button handler error: {e}")
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    doc = update.message.document
-    if not doc.file_name.endswith(".txt"):
-        await update.message.reply_text("❌ Only TXT files allowed.")
-        return
+    try:
+        doc = update.message.document
+        if not doc.file_name.endswith(".txt"):
+            await update.message.reply_text("❌ Only TXT files allowed.")
+            return
 
-    uid = update.message.from_user.id
-    file = await doc.get_file()
-    path = f"{uid}_vouchers.txt"
-    await file.download_to_drive(path)
+        uid = update.message.from_user.id
+        file = await doc.get_file()
+        path = f"{uid}_vouchers.txt"
+        await file.download_to_drive(path)
 
-    await update.message.reply_text("⚡ Processing file...")
+        await update.message.reply_text("⚡ Processing file...")
 
-    status_msg = await update.message.reply_text("Checking...\n\nProcessed: 0\nValid: 0")
+        status_msg = await update.message.reply_text("Checking...\n\nProcessed: 0\nValid: 0")
 
-    with open(path, "r", encoding="utf-8") as f:
-        codes = [v.strip() for v in f if v.strip()]
+        with open(path, "r", encoding="utf-8") as f:
+            codes = [v.strip() for v in f if v.strip()]
 
-    unique, seen = [], set()
-    for c in codes:
-        if c not in seen:
-            unique.append(c)
-            seen.add(c)
+        unique, seen = [], set()
+        for c in codes:
+            if c not in seen:
+                unique.append(c)
+                seen.add(c)
 
-    if len(codes) != len(unique):
-        await update.message.reply_text(f"📊 Removed {len(codes)-len(unique)} duplicates. Checking {len(unique)} unique.")
+        if len(codes) != len(unique):
+            await update.message.reply_text(f"📊 Removed {len(codes)-len(unique)} duplicates. Checking {len(unique)} unique.")
 
-    loop = asyncio.get_running_loop()
-    valid_vouchers = []
+        loop = asyncio.get_running_loop()
+        valid_vouchers = []
 
-    def on_valid_found(voucher_code):
-        asyncio.run_coroutine_threadsafe(
-            update.message.reply_text(f"✅ Valid: `{voucher_code}`", parse_mode="Markdown"),
-            loop
-        )
+        def on_valid_found(voucher_code):
+            asyncio.run_coroutine_threadsafe(
+                update.message.reply_text(f"✅ Valid: `{voucher_code}`", parse_mode="Markdown"),
+                loop
+            )
 
-    def progress(current, total, valid_count):
-        asyncio.run_coroutine_threadsafe(
-            status_msg.edit_text(f"Checking...\n\nProcessed: {current}\nValid: {valid_count}"),
-            loop
-        )
+        def progress(current, total, valid_count):
+            asyncio.run_coroutine_threadsafe(
+                status_msg.edit_text(f"Checking...\n\nProcessed: {current}\nValid: {valid_count}"),
+                loop
+            )
 
-    with ThreadPoolExecutor(max_workers=5) as file_executor:
-        futures = [file_executor.submit(check_voucher, code) for code in unique]
-        
-        for i, future in enumerate(as_completed(futures), 1):
-            result = future.result()
-            if result:
-                code, ok, msg = result
-                mark = "✓" if ok else "✗"
-                print(f"{i}/{len(unique)} [{mark}] {code} -> {msg}")
-                
-                if ok:
-                    valid_vouchers.append(code)
-                    on_valid_found(code)
-                
-                progress(i, len(unique), len(valid_vouchers))
+        with ThreadPoolExecutor(max_workers=5) as file_executor:
+            futures = [file_executor.submit(check_voucher, code) for code in unique]
+            
+            for i, future in enumerate(as_completed(futures), 1):
+                result = future.result()
+                if result:
+                    code, ok, msg = result
+                    mark = "✓" if ok else "✗"
+                    print(f"{i}/{len(unique)} [{mark}] {code} -> {msg}")
+                    
+                    if ok:
+                        valid_vouchers.append(code)
+                        on_valid_found(code)
+                    
+                    progress(i, len(unique), len(valid_vouchers))
 
-    await update.message.reply_text(f"✅ Done. Total valid: {len(valid_vouchers)}")
-    await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
-    os.remove(path)
+        await update.message.reply_text(f"✅ Done. Total valid: {len(valid_vouchers)}")
+        await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
+        os.remove(path)
+    except Exception as e:
+        print(f"File handler error: {e}")
+        await update.message.reply_text("❌ Error processing file.")
 
 def main():
     print("🚀 VOUCHER BOT started...")
