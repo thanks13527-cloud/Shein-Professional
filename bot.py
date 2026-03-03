@@ -26,7 +26,8 @@ auto_counter = 0
 valid_counter = 0
 PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
-status_message = None  # Will store the live status message
+status_message = None
+start_time = None
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -56,7 +57,7 @@ Choose mode below 👇
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter, valid_counter, status_message
+    global auto_active, auto_counter, valid_counter, status_message, start_time
     q = update.callback_query
     await q.answer()
     
@@ -71,6 +72,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_active = True
         auto_counter = 0
         valid_counter = 0
+        start_time = time.time()
         
         # Send live status message
         status_text = """
@@ -91,11 +93,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         def update_status():
-            nonlocal status_message
+            global auto_counter, valid_counter, status_message, start_time, auto_active
             while auto_active:
                 time.sleep(2)
-                if status_message:
-                    speed = int(auto_counter / (time.time() - start_time) * 60) if 'start_time' in locals() else 0
+                if status_message and start_time:
+                    elapsed = time.time() - start_time
+                    speed = int(auto_counter / (elapsed / 60)) if elapsed > 0 else 0
                     status_text = f"""
 ╔══════════════════════════╗
 ║     🤖 AUTO MODE ON      ║
@@ -109,8 +112,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         status_message.edit_text(status_text),
                         asyncio.get_running_loop()
                     )
-        
-        start_time = time.time()
         
         def send_message(text):
             asyncio.run_coroutine_threadsafe(
