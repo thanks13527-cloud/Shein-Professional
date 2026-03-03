@@ -30,7 +30,7 @@ RANDOM_LENGTH = 12
 status_message = None
 start_time = None
 loop = None
-executor = ThreadPoolExecutor(max_workers=5)  # Ek hi executor, kabhi shutdown nahi karenge
+executor = ThreadPoolExecutor(max_workers=10)
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -127,8 +127,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             global auto_counter, valid_counter, auto_active
             
             while auto_active:
-                # Generate 5 codes
-                codes = [generate_random_code() for _ in range(5)]
+                # Generate 10 codes for parallel checking
+                codes = [generate_random_code() for _ in range(10)]
                 
                 # Submit all for parallel checking
                 futures = []
@@ -147,11 +147,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     result = future.result()
                     
-                    if result and auto_active:
+                    if result:
                         c, is_valid, msg = result
                         status = msg.split('(')[-1].rstrip(')')
                         emoji = "✅" if is_valid else "✗"
                         status_text = "Applicable" if is_valid else "Not applicable"
+                        
+                        # 🔥 LOGS ME SHOW HOGA
+                        print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
                         
                         if is_valid:
                             valid_counter += 1
@@ -193,6 +196,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📊 Removed {len(codes)-len(unique)} duplicates. Checking {len(unique)} unique.")
 
     loop = asyncio.get_running_loop()
+    valid_vouchers = []
 
     def on_valid_found(voucher_code):
         asyncio.run_coroutine_threadsafe(
@@ -206,13 +210,23 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop
         )
 
-    valid_vouchers = await asyncio.to_thread(
-        process_vouchers,
-        unique,
-        progress,
-        on_valid_found,
-        uid
-    )
+    # File processing with ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=5) as file_executor:
+        futures = [file_executor.submit(check_voucher, code) for code in unique]
+        
+        for i, future in enumerate(as_completed(futures), 1):
+            result = future.result()
+            if result:
+                code, ok, msg = result
+                mark = "✓" if ok else "✗"
+                # 🔥 LOGS ME SHOW HOGA
+                print(f"{i}/{len(unique)} [{mark}] {code} -> {msg}")
+                
+                if ok:
+                    valid_vouchers.append(code)
+                    on_valid_found(code)
+                
+                progress(i, len(unique), len(valid_vouchers))
 
     await update.message.reply_text(f"✅ Done. Total valid: {len(valid_vouchers)}")
     await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
@@ -220,7 +234,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active, status_message
-    auto_active = False  # Sirf flag band karo, executor nahi
+    auto_active = False
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
         await status_message.edit_text(
