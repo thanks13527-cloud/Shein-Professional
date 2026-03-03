@@ -33,6 +33,7 @@ start_time = None
 loop = None
 auto_thread_running = False
 status_thread_running = False
+stop_flag = False
 
 executor = ThreadPoolExecutor(max_workers=10)
 
@@ -64,7 +65,7 @@ Choose mode below 👇
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter, valid_counter, status_message, start_time, loop, auto_thread_running, status_thread_running
+    global auto_active, auto_counter, valid_counter, status_message, start_time, loop, auto_thread_running, status_thread_running, stop_flag
     q = update.callback_query
     await q.answer()
     
@@ -72,11 +73,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("📂 Upload voucher TXT file.")
     
     elif q.data == "auto":
-        # Stop any existing auto mode first
+        # Agar already active hai to pehle stop karo
         if auto_active:
-            await stopauto_logic(q.message)
-            time.sleep(1)  # Give time for threads to stop
-            
+            await internal_stop(q.message)
+            time.sleep(2)
+        
+        # Reset all flags
         auto_active = True
         auto_counter = 0
         valid_counter = 0
@@ -84,6 +86,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         auto_thread_running = True
         status_thread_running = True
+        stop_flag = False
         
         status_text = """
 ╔══════════════════════════╗
@@ -97,16 +100,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
         
-        # Send fresh status message
-        status_message = await q.message.reply_text(
-            status_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        status_msg_id = status_message.message_id
+        # Agar purana status message hai to use karo, nahi to naya bhejo
+        if status_message:
+            try:
+                await status_message.edit_text(
+                    status_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except:
+                status_message = await q.message.reply_text(
+                    status_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+        else:
+            status_message = await q.message.reply_text(
+                status_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         def update_status():
-            global auto_counter, valid_counter, status_message, start_time, auto_active, loop, status_thread_running
-            while auto_active and status_thread_running:
+            global auto_counter, valid_counter, status_message, start_time, auto_active, loop, status_thread_running, stop_flag
+            while auto_active and status_thread_running and not stop_flag:
                 time.sleep(1)
                 if status_message and start_time:
                     elapsed = time.time() - start_time
@@ -122,10 +136,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     """
                     keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
                     try:
-                        asyncio.run_coroutine_threadsafe(
-                            status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
-                            loop
-                        )
+                        if status_message and not stop_flag:
+                            asyncio.run_coroutine_threadsafe(
+                                status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
+                                loop
+                            )
                     except:
                         pass
             status_thread_running = False
@@ -137,27 +152,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         def auto_loop():
-            global auto_counter, valid_counter, auto_active, auto_thread_running
+            global auto_counter, valid_counter, auto_active, auto_thread_running, stop_flag
             
-            while auto_active and auto_thread_running:
+            while auto_active and auto_thread_running and not stop_flag:
                 codes = [generate_random_code() for _ in range(10)]
                 futures = []
                 for code in codes:
-                    if not auto_active or not auto_thread_running:
+                    if not auto_active or not auto_thread_running or stop_flag:
                         break
                     futures.append(executor.submit(check_voucher, code))
                 
                 try:
                     for future in as_completed(futures):
-                        if not auto_active or not auto_thread_running:
+                        if not auto_active or not auto_thread_running or stop_flag:
                             break
                         
                         auto_counter += 1
                         current_count = auto_counter
                         
-                        result = future.result()
+                        result = future.result(timeout=5)
                         
-                        if result:
+                        if result and not stop_flag:
                             c, is_valid, msg = result
                             status = msg.split('(')[-1].rstrip(')')
                             emoji = "✅" if is_valid else "✗"
@@ -165,7 +180,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             
                             print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
                             
-                            if is_valid:
+                            if is_valid and not stop_flag:
                                 valid_counter += 1
                                 send_message(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})")
                 except Exception as e:
@@ -177,21 +192,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threading.Thread(target=auto_loop, daemon=True).start()
     
     elif q.data == "stop_auto":
-        await stopauto(update, context)
+        await internal_stop(q.message)
+        # Send confirmation that stop is complete
+        await q.message.reply_text("✅ Auto mode stopped.")
 
-async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await stopauto_logic(update.message)
-
-async def stopauto_logic(message):
-    global auto_active, status_message, auto_thread_running, status_thread_running, auto_counter, valid_counter
+async def internal_stop(message):
+    global auto_active, status_message, auto_thread_running, status_thread_running, auto_counter, valid_counter, stop_flag
     
-    # Stop all threads
+    # Set stop flag first
+    stop_flag = True
     auto_active = False
     auto_thread_running = False
     status_thread_running = False
     
-    time.sleep(2)  # Wait for threads to stop
+    # Wait for threads to stop
+    time.sleep(2)
     
+    # Now edit the message
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
         try:
@@ -199,6 +216,7 @@ async def stopauto_logic(message):
                 f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            print("✅ Stop message updated successfully")
         except Exception as e:
             print(f"Stop message edit error: {e}")
             try:
@@ -208,7 +226,8 @@ async def stopauto_logic(message):
                 )
             except:
                 pass
-        status_message = None
+        # Don't set status_message to None immediately
+        # Let it stay for restart
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
