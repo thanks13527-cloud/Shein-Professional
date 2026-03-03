@@ -13,7 +13,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -30,7 +30,7 @@ RANDOM_LENGTH = 12
 status_message = None
 start_time = None
 loop = None
-executor = ThreadPoolExecutor(max_workers=5)  # Parallel execution
+executor = ThreadPoolExecutor(max_workers=5)
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -99,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             global auto_counter, valid_counter, status_message, start_time, auto_active, loop
             while auto_active:
                 time.sleep(1)
-                if status_message and start_time:
+                if status_message and start_time and auto_active:
                     elapsed = time.time() - start_time
                     speed = int(auto_counter / (elapsed / 60)) if elapsed > 0 else 0
                     status_text = f"""
@@ -123,33 +123,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 loop
             )
         
-        def check_code(code):
-            """Check single code with retry"""
-            result = check_voucher(code)
-            if result is None:
-                time.sleep(1)
-                result = check_voucher(code, is_retry=True)
-            return result
-        
         def auto_loop():
             global auto_counter, valid_counter, auto_active
-            futures = []
             
             while auto_active:
-                # Generate and submit multiple codes in parallel
-                for _ in range(5):  # Submit 5 codes at once
-                    if not auto_active:
-                        break
-                    code = generate_random_code()
-                    auto_counter += 1
-                    futures.append(executor.submit(check_code, code))
+                # Generate 5 codes
+                codes = [generate_random_code() for _ in range(5)]
                 
-                # Check results as they complete
-                for future in futures:
+                # Submit all for parallel checking
+                future_to_code = {executor.submit(check_voucher, code): code for code in codes}
+                
+                # Process results as they complete
+                for future in as_completed(future_to_code):
                     if not auto_active:
                         break
+                    
+                    code = future_to_code[future]
+                    auto_counter += 1
+                    current_count = auto_counter
+                    
                     result = future.result()
-                    if result:
+                    
+                    if result and auto_active:
                         c, is_valid, msg = result
                         status = msg.split('(')[-1].rstrip(')')
                         emoji = "✅" if is_valid else "✗"
@@ -157,13 +152,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         if is_valid:
                             valid_counter += 1
-                            send_message(f"{emoji} Auto #{auto_counter}: `{c}` -> {status_text} ({status})")
+                            send_message(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})")
                         else:
-                            print(f"{emoji} Auto #{auto_counter}: {c} -> {status_text} ({status})")
-                    else:
-                        print(f"❌ Auto #{auto_counter}: {code} -> Failed")
-                
-                futures.clear()  # Clear for next batch
+                            print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
+                    elif auto_active:
+                        print(f"❌ Auto #{current_count}: {code} -> Failed")
         
         # Start status updater thread
         threading.Thread(target=update_status, daemon=True).start()
@@ -229,6 +222,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active, status_message
     auto_active = False
+    executor.shutdown(wait=False)  # Stop accepting new tasks
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
         await status_message.edit_text(
