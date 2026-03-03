@@ -28,8 +28,12 @@ valid_counter = 0
 PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
 status_message = None
+status_msg_id = None
 start_time = None
 loop = None
+auto_thread_running = False
+status_thread_running = False
+
 executor = ThreadPoolExecutor(max_workers=10)
 
 def generate_random_code():
@@ -60,7 +64,7 @@ Choose mode below 👇
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter, valid_counter, status_message, start_time, loop
+    global auto_active, auto_counter, valid_counter, status_message, start_time, loop, auto_thread_running, status_thread_running
     q = update.callback_query
     await q.answer()
     
@@ -68,17 +72,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("📂 Upload voucher TXT file.")
     
     elif q.data == "auto":
+        # Stop any existing auto mode first
         if auto_active:
-            await q.message.reply_text("⚠️ Auto mode already running!")
-            return
+            await stopauto_logic(q.message)
+            time.sleep(1)  # Give time for threads to stop
             
         auto_active = True
         auto_counter = 0
         valid_counter = 0
         start_time = time.time()
         loop = asyncio.get_running_loop()
+        auto_thread_running = True
+        status_thread_running = True
         
-        # Agar purana status message hai to use edit karo, nahi to naya bhejo
         status_text = """
 ╔══════════════════════════╗
 ║     🤖 AUTO MODE ON      ║
@@ -91,26 +97,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
         
-        if status_message:
-            try:
-                await status_message.edit_text(
-                    status_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except:
-                status_message = await q.message.reply_text(
-                    status_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-        else:
-            status_message = await q.message.reply_text(
-                status_text,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+        # Send fresh status message
+        status_message = await q.message.reply_text(
+            status_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        status_msg_id = status_message.message_id
         
         def update_status():
-            global auto_counter, valid_counter, status_message, start_time, auto_active, loop
-            while auto_active:
+            global auto_counter, valid_counter, status_message, start_time, auto_active, loop, status_thread_running
+            while auto_active and status_thread_running:
                 time.sleep(1)
                 if status_message and start_time:
                     elapsed = time.time() - start_time
@@ -125,10 +121,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ╚══════════════════════════╝
                     """
                     keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
-                    asyncio.run_coroutine_threadsafe(
-                        status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
-                        loop
-                    )
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
+                            loop
+                        )
+                    except:
+                        pass
+            status_thread_running = False
         
         def send_message(text):
             asyncio.run_coroutine_threadsafe(
@@ -137,42 +137,78 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         def auto_loop():
-            global auto_counter, valid_counter, auto_active
+            global auto_counter, valid_counter, auto_active, auto_thread_running
             
-            while auto_active:
+            while auto_active and auto_thread_running:
                 codes = [generate_random_code() for _ in range(10)]
                 futures = []
                 for code in codes:
-                    if not auto_active:
+                    if not auto_active or not auto_thread_running:
                         break
                     futures.append(executor.submit(check_voucher, code))
                 
-                for future in as_completed(futures):
-                    if not auto_active:
-                        break
-                    
-                    auto_counter += 1
-                    current_count = auto_counter
-                    
-                    result = future.result()
-                    
-                    if result:
-                        c, is_valid, msg = result
-                        status = msg.split('(')[-1].rstrip(')')
-                        emoji = "✅" if is_valid else "✗"
-                        status_text = "Applicable" if is_valid else "Not applicable"
+                try:
+                    for future in as_completed(futures):
+                        if not auto_active or not auto_thread_running:
+                            break
                         
-                        print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
+                        auto_counter += 1
+                        current_count = auto_counter
                         
-                        if is_valid:
-                            valid_counter += 1
-                            send_message(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})")
+                        result = future.result()
+                        
+                        if result:
+                            c, is_valid, msg = result
+                            status = msg.split('(')[-1].rstrip(')')
+                            emoji = "✅" if is_valid else "✗"
+                            status_text = "Applicable" if is_valid else "Not applicable"
+                            
+                            print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
+                            
+                            if is_valid:
+                                valid_counter += 1
+                                send_message(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})")
+                except Exception as e:
+                    print(f"Auto loop error: {e}")
+            
+            auto_thread_running = False
         
         threading.Thread(target=update_status, daemon=True).start()
         threading.Thread(target=auto_loop, daemon=True).start()
     
     elif q.data == "stop_auto":
         await stopauto(update, context)
+
+async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await stopauto_logic(update.message)
+
+async def stopauto_logic(message):
+    global auto_active, status_message, auto_thread_running, status_thread_running, auto_counter, valid_counter
+    
+    # Stop all threads
+    auto_active = False
+    auto_thread_running = False
+    status_thread_running = False
+    
+    time.sleep(2)  # Wait for threads to stop
+    
+    if status_message:
+        keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
+        try:
+            await status_message.edit_text(
+                f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            print(f"Stop message edit error: {e}")
+            try:
+                await message.reply_text(
+                    f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except:
+                pass
+        status_message = None
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
@@ -235,26 +271,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Done. Total valid: {len(valid_vouchers)}")
     await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
     os.remove(path)
-
-async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, status_message
-    auto_active = False
-    
-    if status_message:
-        keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
-        try:
-            await status_message.edit_text(
-                f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        except:
-            # Agar edit fail ho to naya message bhejo
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        status_message = None
 
 def main():
     print("🚀 VOUCHER BOT started...")
