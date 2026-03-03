@@ -13,6 +13,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from concurrent.futures import ThreadPoolExecutor
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -29,6 +30,7 @@ RANDOM_LENGTH = 12
 status_message = None
 start_time = None
 loop = None
+executor = ThreadPoolExecutor(max_workers=5)  # Parallel execution
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -121,35 +123,47 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 loop
             )
         
+        def check_code(code):
+            """Check single code with retry"""
+            result = check_voucher(code)
+            if result is None:
+                time.sleep(1)
+                result = check_voucher(code, is_retry=True)
+            return result
+        
         def auto_loop():
             global auto_counter, valid_counter, auto_active
+            futures = []
+            
             while auto_active:
-                code = generate_random_code()
-                auto_counter += 1
+                # Generate and submit multiple codes in parallel
+                for _ in range(5):  # Submit 5 codes at once
+                    if not auto_active:
+                        break
+                    code = generate_random_code()
+                    auto_counter += 1
+                    futures.append(executor.submit(check_code, code))
                 
-                # First attempt
-                result = check_voucher(code)
-                
-                if result is None:
-                    # Recheck failed
-                    time.sleep(1)
-                    result = check_voucher(code, is_retry=True)
-                
-                if result:
-                    c, is_valid, msg = result
-                    status = msg.split('(')[-1].rstrip(')')
-                    emoji = "✅" if is_valid else "✗"
-                    status_text = "Applicable" if is_valid else "Not applicable"
-                    
-                    if is_valid:
-                        valid_counter += 1
-                        send_message(f"{emoji} Auto #{auto_counter}: `{c}` -> {status_text} ({status})")
+                # Check results as they complete
+                for future in futures:
+                    if not auto_active:
+                        break
+                    result = future.result()
+                    if result:
+                        c, is_valid, msg = result
+                        status = msg.split('(')[-1].rstrip(')')
+                        emoji = "✅" if is_valid else "✗"
+                        status_text = "Applicable" if is_valid else "Not applicable"
+                        
+                        if is_valid:
+                            valid_counter += 1
+                            send_message(f"{emoji} Auto #{auto_counter}: `{c}` -> {status_text} ({status})")
+                        else:
+                            print(f"{emoji} Auto #{auto_counter}: {c} -> {status_text} ({status})")
                     else:
-                        print(f"{emoji} Auto #{auto_counter}: {c} -> {status_text} ({status})")
-                else:
-                    print(f"❌ Auto #{auto_counter}: {code} -> Failed")
+                        print(f"❌ Auto #{auto_counter}: {code} -> Failed")
                 
-                time.sleep(1)  # ⚡ Fast delay
+                futures.clear()  # Clear for next batch
         
         # Start status updater thread
         threading.Thread(target=update_status, daemon=True).start()
@@ -218,7 +232,7 @@ async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
         await status_message.edit_text(
-            f"🛑 Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+            f"✅ Auto mode stopped. Total checked: {auto_counter} | Valid: {valid_counter}",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         status_message = None
