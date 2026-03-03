@@ -40,7 +40,7 @@ def generate_random_code():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = """
 ╔══════════════════════════╗
-║     🎫 VOUCHER BOT       ║
+║        VOUCHER BOT       ║
 ╠══════════════════════════╣
 ║ • Fast checking          ║
 ║ • Auto generate mode     ║
@@ -153,7 +153,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         emoji = "✅" if is_valid else "✗"
                         status_text = "Applicable" if is_valid else "Not applicable"
                         
-                        # 🔥 LOGS ME SHOW HOGA
                         print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
                         
                         if is_valid:
@@ -219,7 +218,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if result:
                 code, ok, msg = result
                 mark = "✓" if ok else "✗"
-                # 🔥 LOGS ME SHOW HOGA
                 print(f"{i}/{len(unique)} [{mark}] {code} -> {msg}")
                 
                 if ok:
@@ -235,10 +233,12 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active, status_message
     auto_active = False
+    
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
+        # Edit the existing status message to show stop message
         await status_message.edit_text(
-            f"✅ Auto mode stopped. Total checked: {auto_counter} | Valid: {valid_counter}",
+            f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         status_message = None
