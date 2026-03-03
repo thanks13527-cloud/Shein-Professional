@@ -28,6 +28,7 @@ PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
 status_message = None
 start_time = None
+loop = None
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -57,7 +58,7 @@ Choose mode below 👇
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter, valid_counter, status_message, start_time
+    global auto_active, auto_counter, valid_counter, status_message, start_time, loop
     q = update.callback_query
     await q.answer()
     
@@ -73,6 +74,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_counter = 0
         valid_counter = 0
         start_time = time.time()
+        loop = asyncio.get_running_loop()  # Store the event loop
         
         # Send live status message
         status_text = """
@@ -93,7 +95,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         def update_status():
-            global auto_counter, valid_counter, status_message, start_time, auto_active
+            global auto_counter, valid_counter, status_message, start_time, auto_active, loop
             while auto_active:
                 time.sleep(2)
                 if status_message and start_time:
@@ -110,13 +112,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     """
                     asyncio.run_coroutine_threadsafe(
                         status_message.edit_text(status_text),
-                        asyncio.get_running_loop()
+                        loop
                     )
         
         def send_message(text):
             asyncio.run_coroutine_threadsafe(
                 q.message.reply_text(text, parse_mode="Markdown"),
-                asyncio.get_running_loop()
+                loop
             )
         
         def auto_loop():
