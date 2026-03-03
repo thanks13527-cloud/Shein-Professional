@@ -2,108 +2,83 @@ import os
 import asyncio
 import threading
 import time
+import random
+import string
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters,
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN missing")
 
-from voucher_checker import process_vouchers, start_auto_check
+from voucher_checker import process_vouchers, check_voucher
 
-# Global counters
-total_checked = 0
-valid_found = 0
-start_time = None
+# Auto mode variables
+auto_active = False
+PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
+RANDOM_LENGTH = 12
 
-# ========== START COMMAND ==========
+def generate_random_code():
+    prefix = random.choice(PREFIXES)
+    random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=RANDOM_LENGTH))
+    return prefix + random_part
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global start_time
-    start_time = time.time()
-    
-    welcome_text = """
-╔══════════════════════════╗
-║     🎫 VOUCHER BOT       ║
-╠══════════════════════════╣
-║ • Fast checking          ║
-║ • Auto generate mode     ║
-║ • Real-time valid alerts ║
-╚══════════════════════════╝
-
-Choose mode below 👇
-    """
-    
     keyboard = [
-        [InlineKeyboardButton("📂 Upload TXT File", callback_data="check")],
-        [InlineKeyboardButton("🤖 Auto Generate Mode", callback_data="auto")],
-        [InlineKeyboardButton("📊 Statistics", callback_data="stats")]
+        [InlineKeyboardButton("✅ Check Voucher", callback_data="check")],
+        [InlineKeyboardButton("🤖 Auto Generate Mode", callback_data="auto")]
     ]
-    
     await update.message.reply_text(
-        welcome_text,
+        "Welcome 👋\nChoose mode:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ========== BUTTON HANDLER ==========
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global total_checked, valid_found, start_time
-    
+    global auto_active
     q = update.callback_query
     await q.answer()
     
     if q.data == "check":
-        await q.message.reply_text("📂 Please upload your voucher TXT file.")
+        await q.message.reply_text("📂 Upload voucher TXT file.")
     
     elif q.data == "auto":
+        if auto_active:
+            await q.message.reply_text("⚠️ Auto mode already running!")
+            return
+            
+        auto_active = True
         await q.message.reply_text(
-            "🤖 Auto Generate Mode activated!\n\n"
-            "I will notify you whenever a valid voucher is found."
+            "🤖 Auto Generate Mode started!\n"
+            "I will notify you when valid vouchers are found.\n"
+            "Use /stopauto to stop."
         )
         
         def valid_callback(code):
-            global valid_found
-            valid_found += 1
             asyncio.run_coroutine_threadsafe(
-                q.message.reply_text(f"✅✅✅ VALID VOUCHER: `{code}`", parse_mode="Markdown"),
+                q.message.reply_text(f"✅ VALID VOUCHER FOUND: `{code}`", parse_mode="Markdown"),
                 asyncio.get_running_loop()
             )
         
-        def update_counter():
-            global total_checked
-            total_checked += 1
+        def auto_loop():
+            while auto_active:
+                code = generate_random_code()
+                print(f"🔍 Auto checking: {code}")
+                result = check_voucher(code)
+                if result and result[1]:  # if valid
+                    valid_callback(code)
+                time.sleep(2)
         
-        # Start auto check in background
-        thread = threading.Thread(
-            target=start_auto_check,
-            args=(valid_callback, update_counter),
-            daemon=True
-        )
+        thread = threading.Thread(target=auto_loop, daemon=True)
         thread.start()
-    
-    elif q.data == "stats":
-        elapsed = time.time() - start_time if start_time else 1
-        speed = int(total_checked / (elapsed / 60)) if elapsed > 0 else 0
-        
-        stats_text = f"""
-╔══════════════════════════╗
-║      📊 STATISTICS       ║
-╠══════════════════════════╣
-║ 📋 Total Checked: {total_checked}
-║ ✅ Valid Found: {valid_found}
-║ ⚡ Speed: {speed}/min
-╚══════════════════════════╝
-        """
-        
-        await q.message.reply_text(stats_text)
 
-# ========== FILE UPLOAD HANDLER ==========
+# File upload handler (exactly as before)
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc.file_name.endswith(".txt"):
@@ -111,11 +86,12 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.message.from_user.id
+
     file = await doc.get_file()
     path = f"{uid}_vouchers.txt"
     await file.download_to_drive(path)
 
-    await update.message.reply_text("⚡ Processing file...")
+    await update.message.reply_text("⚡ Starting fast check...")
 
     status_msg = await update.message.reply_text("Checking...\n\nProcessed: 0\nValid: 0")
 
@@ -158,11 +134,17 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
     os.remove(path)
 
-# ========== MAIN ==========
+# Command to stop auto mode
+async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global auto_active
+    auto_active = False
+    await update.message.reply_text("🛑 Auto mode stopped.")
+
 def main():
-    print("🚀 VOUCHER BOT started...")
+    print("⚡ Ultra Fast Bot with Auto Mode started...")
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stopauto", stopauto))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     app.run_polling()
