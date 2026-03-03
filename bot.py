@@ -18,10 +18,11 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN missing")
 
-from voucher_checker import process_vouchers, check_voucher
+from voucher_checker import check_voucher, process_vouchers
 
 # Auto mode variables
 auto_active = False
+auto_counter = 0
 PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
 
@@ -41,7 +42,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active
+    global auto_active, auto_counter
     q = update.callback_query
     await q.answer()
     
@@ -54,31 +55,50 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         auto_active = True
+        auto_counter = 0
         await q.message.reply_text(
             "🤖 Auto Generate Mode started!\n"
-            "I will notify you when valid vouchers are found.\n"
+            "I'll show live results below.\n"
             "Use /stopauto to stop."
         )
         
-        def valid_callback(code):
+        def valid_callback(code, status_code, is_valid):
             asyncio.run_coroutine_threadsafe(
-                q.message.reply_text(f"✅ VALID VOUCHER FOUND: `{code}`", parse_mode="Markdown"),
+                q.message.reply_text(
+                    f"{'✅' if is_valid else '✗'} Auto #{auto_counter}: `{code}` -> {'Applicable' if is_valid else 'Not applicable'} ({status_code})",
+                    parse_mode="Markdown"
+                ),
                 asyncio.get_running_loop()
             )
         
         def auto_loop():
+            global auto_counter, auto_active
             while auto_active:
                 code = generate_random_code()
-                print(f"🔍 Auto checking: {code}")
+                auto_counter += 1
+                print(f"🤖 Auto #{auto_counter}: Checking {code}")
+                
+                # First attempt
                 result = check_voucher(code)
-                if result and result[1]:  # if valid
-                    valid_callback(code)
+                if result is None:
+                    # Failed - recheck once
+                    print(f"🔄 Rechecking failed voucher: {code}")
+                    time.sleep(2)
+                    result = check_voucher(code)
+                
+                if result:
+                    code, is_valid, msg = result
+                    status_code = msg.split('(')[-1].rstrip(')') if '(' in msg else '200'
+                    valid_callback(code, status_code, is_valid)
+                else:
+                    valid_callback(code, 'Timeout', False)
+                
                 time.sleep(2)
         
         thread = threading.Thread(target=auto_loop, daemon=True)
         thread.start()
 
-# File upload handler (exactly as before)
+# File upload handler (unchanged)
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc.file_name.endswith(".txt"):
@@ -86,7 +106,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.message.from_user.id
-
     file = await doc.get_file()
     path = f"{uid}_vouchers.txt"
     await file.download_to_drive(path)
@@ -98,7 +117,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(path, "r", encoding="utf-8") as f:
         codes = [v.strip() for v in f if v.strip()]
 
-    # Remove duplicates
     unique, seen = [], set()
     for c in codes:
         if c not in seen:
@@ -134,11 +152,10 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
     os.remove(path)
 
-# Command to stop auto mode
 async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active
     auto_active = False
-    await update.message.reply_text("🛑 Auto mode stopped.")
+    await update.message.reply_text(f"🛑 Auto mode stopped. Total checked: {auto_counter}")
 
 def main():
     print("⚡ Ultra Fast Bot with Auto Mode started...")
