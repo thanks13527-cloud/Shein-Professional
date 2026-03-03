@@ -23,8 +23,10 @@ from voucher_checker import check_voucher, process_vouchers
 # Auto mode variables
 auto_active = False
 auto_counter = 0
+valid_counter = 0
 PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
+status_message = None  # Will store the live status message
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -32,17 +34,29 @@ def generate_random_code():
     return prefix + random_part
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    welcome_text = """
+╔══════════════════════════╗
+║     🎫 VOUCHER BOT       ║
+╠══════════════════════════╣
+║ • Fast checking          ║
+║ • Auto generate mode     ║
+║ • Real-time valid alerts ║
+╚══════════════════════════╝
+
+Choose mode below 👇
+    """
+    
     keyboard = [
         [InlineKeyboardButton("✅ Check Voucher", callback_data="check")],
-        [InlineKeyboardButton("🤖 Auto Generate Mode", callback_data="auto")]
+        [InlineKeyboardButton("🤖 Auto Generate", callback_data="auto")]
     ]
     await update.message.reply_text(
-        "Welcome 👋\nChoose mode:",
+        welcome_text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter
+    global auto_active, auto_counter, valid_counter, status_message
     q = update.callback_query
     await q.answer()
     
@@ -56,49 +70,89 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         auto_active = True
         auto_counter = 0
+        valid_counter = 0
+        
+        # Send live status message
+        status_text = """
+╔══════════════════════════╗
+║     🤖 AUTO MODE ON      ║
+╠══════════════════════════╣
+║ 📊 Checked: 0            ║
+║ ✅ Valid: 0              ║
+║ ⚡ Speed: 0/min          ║
+╚══════════════════════════╝
+        """
+        status_message = await q.message.reply_text(status_text)
+        
         await q.message.reply_text(
-            "🤖 Auto Generate Mode started!\n"
-            "I'll show live results below.\n"
+            "✅ Auto mode activated!\n"
+            "I'll notify you when valid vouchers are found.\n"
             "Use /stopauto to stop."
         )
         
-        def valid_callback(code, status_code, is_valid):
+        def update_status():
+            nonlocal status_message
+            while auto_active:
+                time.sleep(2)
+                if status_message:
+                    speed = int(auto_counter / (time.time() - start_time) * 60) if 'start_time' in locals() else 0
+                    status_text = f"""
+╔══════════════════════════╗
+║     🤖 AUTO MODE ON      ║
+╠══════════════════════════╣
+║ 📊 Checked: {auto_counter}            ║
+║ ✅ Valid: {valid_counter}              ║
+║ ⚡ Speed: {speed}/min          ║
+╚══════════════════════════╝
+                    """
+                    asyncio.run_coroutine_threadsafe(
+                        status_message.edit_text(status_text),
+                        asyncio.get_running_loop()
+                    )
+        
+        start_time = time.time()
+        
+        def send_message(text):
             asyncio.run_coroutine_threadsafe(
-                q.message.reply_text(
-                    f"{'✅' if is_valid else '✗'} Auto #{auto_counter}: `{code}` -> {'Applicable' if is_valid else 'Not applicable'} ({status_code})",
-                    parse_mode="Markdown"
-                ),
+                q.message.reply_text(text, parse_mode="Markdown"),
                 asyncio.get_running_loop()
             )
         
         def auto_loop():
-            global auto_counter, auto_active
+            global auto_counter, valid_counter, auto_active
             while auto_active:
                 code = generate_random_code()
                 auto_counter += 1
-                print(f"🤖 Auto #{auto_counter}: Checking {code}")
                 
                 # First attempt
                 result = check_voucher(code)
+                
                 if result is None:
-                    # Failed - recheck once
-                    print(f"🔄 Rechecking failed voucher: {code}")
+                    # Recheck failed
                     time.sleep(2)
-                    result = check_voucher(code)
+                    result = check_voucher(code, is_retry=True)
                 
                 if result:
-                    code, is_valid, msg = result
-                    status_code = msg.split('(')[-1].rstrip(')') if '(' in msg else '200'
-                    valid_callback(code, status_code, is_valid)
+                    c, is_valid, msg = result
+                    status = msg.split('(')[-1].rstrip(')')
+                    emoji = "✅" if is_valid else "✗"
+                    status_text = "Applicable" if is_valid else "Not applicable"
+                    
+                    if is_valid:
+                        valid_counter += 1
+                        send_message(f"{emoji} Auto #{auto_counter}: `{c}` -> {status_text} ({status})")
+                    else:
+                        print(f"{emoji} Auto #{auto_counter}: {c} -> {status_text} ({status})")
                 else:
-                    valid_callback(code, 'Timeout', False)
+                    print(f"❌ Auto #{auto_counter}: {code} -> Failed")
                 
                 time.sleep(2)
         
-        thread = threading.Thread(target=auto_loop, daemon=True)
-        thread.start()
+        # Start status updater thread
+        threading.Thread(target=update_status, daemon=True).start()
+        # Start auto check thread
+        threading.Thread(target=auto_loop, daemon=True).start()
 
-# File upload handler (unchanged)
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc.file_name.endswith(".txt"):
@@ -110,7 +164,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     path = f"{uid}_vouchers.txt"
     await file.download_to_drive(path)
 
-    await update.message.reply_text("⚡ Starting fast check...")
+    await update.message.reply_text("⚡ Processing file...")
 
     status_msg = await update.message.reply_text("Checking...\n\nProcessed: 0\nValid: 0")
 
@@ -153,12 +207,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.remove(path)
 
 async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active
+    global auto_active, status_message
     auto_active = False
-    await update.message.reply_text(f"🛑 Auto mode stopped. Total checked: {auto_counter}")
+    if status_message:
+        await status_message.edit_text("🛑 Auto mode stopped.")
+    await update.message.reply_text(f"✅ Auto mode stopped. Total checked: {auto_counter} | Valid: {valid_counter}")
 
 def main():
-    print("⚡ Ultra Fast Bot with Auto Mode started...")
+    print("🚀 VOUCHER BOT started...")
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stopauto", stopauto))
