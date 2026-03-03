@@ -28,6 +28,7 @@ valid_counter = 0
 PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
 status_message = None
+status_message_id = None
 start_time = None
 loop = None
 executor = ThreadPoolExecutor(max_workers=10)
@@ -60,7 +61,7 @@ Choose mode below 👇
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter, valid_counter, status_message, start_time, loop
+    global auto_active, auto_counter, valid_counter, status_message, status_message_id, start_time, loop
     q = update.callback_query
     await q.answer()
     
@@ -90,10 +91,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         
         keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
-        status_message = await q.message.reply_text(
-            status_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        
+        # Agar purana status message hai to use edit karo, nahi to naya bhejo
+        if status_message:
+            try:
+                await status_message.edit_text(
+                    status_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except:
+                status_message = await q.message.reply_text(
+                    status_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+        else:
+            status_message = await q.message.reply_text(
+                status_text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         
         def update_status():
             global auto_counter, valid_counter, status_message, start_time, auto_active, loop
@@ -112,10 +127,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ╚══════════════════════════╝
                     """
                     keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
-                    asyncio.run_coroutine_threadsafe(
-                        status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
-                        loop
-                    )
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
+                            loop
+                        )
+                    except:
+                        pass
         
         def send_message(text):
             asyncio.run_coroutine_threadsafe(
@@ -127,17 +145,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             global auto_counter, valid_counter, auto_active
             
             while auto_active:
-                # Generate 10 codes for parallel checking
                 codes = [generate_random_code() for _ in range(10)]
-                
-                # Submit all for parallel checking
                 futures = []
                 for code in codes:
                     if not auto_active:
                         break
                     futures.append(executor.submit(check_voucher, code))
                 
-                # Process results as they complete
                 for future in as_completed(futures):
                     if not auto_active:
                         break
@@ -159,9 +173,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             valid_counter += 1
                             send_message(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})")
         
-        # Start status updater thread
         threading.Thread(target=update_status, daemon=True).start()
-        # Start auto check thread
         threading.Thread(target=auto_loop, daemon=True).start()
     
     elif q.data == "stop_auto":
@@ -209,7 +221,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop
         )
 
-    # File processing with ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=5) as file_executor:
         futures = [file_executor.submit(check_voucher, code) for code in unique]
         
@@ -236,11 +247,19 @@ async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
-        # Edit the existing status message to show stop message
-        await status_message.edit_text(
-            f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        try:
+            await status_message.edit_text(
+                f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            print(f"Error editing message: {e}")
+            # Agar edit fail ho to naya message bhejo
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         status_message = None
 
 def main():
