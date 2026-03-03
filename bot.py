@@ -30,7 +30,7 @@ RANDOM_LENGTH = 12
 status_message = None
 start_time = None
 loop = None
-executor = ThreadPoolExecutor(max_workers=5)
+executor = ThreadPoolExecutor(max_workers=5)  # Ek hi executor, kabhi shutdown nahi karenge
 
 def generate_random_code():
     prefix = random.choice(PREFIXES)
@@ -99,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             global auto_counter, valid_counter, status_message, start_time, auto_active, loop
             while auto_active:
                 time.sleep(1)
-                if status_message and start_time and auto_active:
+                if status_message and start_time:
                     elapsed = time.time() - start_time
                     speed = int(auto_counter / (elapsed / 60)) if elapsed > 0 else 0
                     status_text = f"""
@@ -131,14 +131,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 codes = [generate_random_code() for _ in range(5)]
                 
                 # Submit all for parallel checking
-                future_to_code = {executor.submit(check_voucher, code): code for code in codes}
+                futures = []
+                for code in codes:
+                    if not auto_active:
+                        break
+                    futures.append(executor.submit(check_voucher, code))
                 
                 # Process results as they complete
-                for future in as_completed(future_to_code):
+                for future in as_completed(futures):
                     if not auto_active:
                         break
                     
-                    code = future_to_code[future]
                     auto_counter += 1
                     current_count = auto_counter
                     
@@ -153,10 +156,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if is_valid:
                             valid_counter += 1
                             send_message(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})")
-                        else:
-                            print(f"{emoji} Auto #{current_count}: {c} -> {status_text} ({status})")
-                    elif auto_active:
-                        print(f"❌ Auto #{current_count}: {code} -> Failed")
         
         # Start status updater thread
         threading.Thread(target=update_status, daemon=True).start()
@@ -221,8 +220,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global auto_active, status_message
-    auto_active = False
-    executor.shutdown(wait=False)  # Stop accepting new tasks
+    auto_active = False  # Sirf flag band karo, executor nahi
     if status_message:
         keyboard = [[InlineKeyboardButton("▶️ RESTART AUTO", callback_data="auto")]]
         await status_message.edit_text(
