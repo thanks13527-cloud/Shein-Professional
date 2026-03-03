@@ -21,23 +21,58 @@ if not TOKEN:
 
 from voucher_checker import check_voucher, process_vouchers
 
-# Global variables
+# ========== RATE LIMITER FOR TELEGRAM ==========
+class RateLimiter:
+    def __init__(self, max_per_second=20):
+        self.max_per_second = max_per_second
+        self.lock = asyncio.Lock()
+        self.tokens = max_per_second
+        self.last_refill = time.time()
+    
+    async def acquire(self):
+        async with self.lock:
+            now = time.time()
+            elapsed = now - self.last_refill
+            self.tokens = min(self.max_per_second, self.tokens + elapsed * self.max_per_second)
+            self.last_refill = now
+            
+            if self.tokens < 1:
+                wait = 1 / self.max_per_second
+                await asyncio.sleep(wait)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
+
+rate_limiter = RateLimiter(max_per_second=20)
+
+async def safe_send_message(chat_id, text, parse_mode=None, reply_markup=None, bot=None):
+    await rate_limiter.acquire()
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"Send error: {e}")
+
+# ========== GLOBAL VARIABLES ==========
 auto_active = False
 auto_counter = 0
 valid_counter = 0
-PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
+PREFIX = "SVC"  # 🔥 Sirf SVC prefix
 RANDOM_LENGTH = 12
 status_message = None
 start_time = None
 loop = None
 auto_thread = None
 status_thread = None
-executor = ThreadPoolExecutor(max_workers=10)
+executor = ThreadPoolExecutor(max_workers=15)  # ⚡ 15 parallel workers
 
 def generate_random_code():
-    prefix = random.choice(PREFIXES)
     random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=RANDOM_LENGTH))
-    return prefix + random_part
+    return PREFIX + random_part  # SVC + 12 random chars = 15 total
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = """
@@ -138,7 +173,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 global auto_counter, valid_counter, auto_active
                 
                 while auto_active:
-                    codes = [generate_random_code() for _ in range(10)]
+                    codes = [generate_random_code() for _ in range(15)]  # ⚡ 15 codes per batch
                     futures = []
                     for code in codes:
                         if not auto_active:
@@ -166,7 +201,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 valid_counter += 1
                                 try:
                                     asyncio.run_coroutine_threadsafe(
-                                        q.message.reply_text(f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})", parse_mode="Markdown"),
+                                        safe_send_message(
+                                            chat_id=q.message.chat_id,
+                                            text=f"{emoji} Auto #{current_count}: `{c}` -> {status_text} ({status})",
+                                            parse_mode="Markdown",
+                                            bot=context.bot
+                                        ),
                                         loop
                                     )
                                 except:
@@ -214,7 +254,11 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         path = f"{uid}_vouchers.txt"
         await file.download_to_drive(path)
 
-        await update.message.reply_text("⚡ Processing file...")
+        await safe_send_message(
+            chat_id=update.message.chat_id,
+            text="⚡ Processing file...",
+            bot=context.bot
+        )
 
         status_msg = await update.message.reply_text("Checking...\n\nProcessed: 0\nValid: 0")
 
@@ -228,14 +272,23 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 seen.add(c)
 
         if len(codes) != len(unique):
-            await update.message.reply_text(f"📊 Removed {len(codes)-len(unique)} duplicates. Checking {len(unique)} unique.")
+            await safe_send_message(
+                chat_id=update.message.chat_id,
+                text=f"📊 Removed {len(codes)-len(unique)} duplicates. Checking {len(unique)} unique.",
+                bot=context.bot
+            )
 
         loop = asyncio.get_running_loop()
         valid_vouchers = []
 
         def on_valid_found(voucher_code):
             asyncio.run_coroutine_threadsafe(
-                update.message.reply_text(f"✅ Valid: `{voucher_code}`", parse_mode="Markdown"),
+                safe_send_message(
+                    chat_id=update.message.chat_id,
+                    text=f"✅ Valid: `{voucher_code}`",
+                    parse_mode="Markdown",
+                    bot=context.bot
+                ),
                 loop
             )
 
@@ -261,12 +314,20 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     progress(i, len(unique), len(valid_vouchers))
 
-        await update.message.reply_text(f"✅ Done. Total valid: {len(valid_vouchers)}")
+        await safe_send_message(
+            chat_id=update.message.chat_id,
+            text=f"✅ Done. Total valid: {len(valid_vouchers)}",
+            bot=context.bot
+        )
         await status_msg.edit_text(f"✅ Completed. Valid: {len(valid_vouchers)}")
         os.remove(path)
     except Exception as e:
         print(f"File handler error: {e}")
-        await update.message.reply_text("❌ Error processing file.")
+        await safe_send_message(
+            chat_id=update.message.chat_id,
+            text="❌ Error processing file.",
+            bot=context.bot
+        )
 
 def main():
     print("🚀 VOUCHER BOT started...")
