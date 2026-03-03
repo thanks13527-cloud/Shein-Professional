@@ -28,7 +28,6 @@ valid_counter = 0
 PREFIXES = ["SVD", "SVH", "SVI", "SVC"]
 RANDOM_LENGTH = 12
 status_message = None
-status_message_id = None
 start_time = None
 loop = None
 executor = ThreadPoolExecutor(max_workers=10)
@@ -61,7 +60,7 @@ Choose mode below 👇
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global auto_active, auto_counter, valid_counter, status_message, status_message_id, start_time, loop
+    global auto_active, auto_counter, valid_counter, status_message, start_time, loop
     q = update.callback_query
     await q.answer()
     
@@ -79,7 +78,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_time = time.time()
         loop = asyncio.get_running_loop()
         
-        # Send live status message with stop button
+        # Agar purana status message hai to use edit karo, nahi to naya bhejo
         status_text = """
 ╔══════════════════════════╗
 ║     🤖 AUTO MODE ON      ║
@@ -92,7 +91,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
         
-        # Agar purana status message hai to use edit karo, nahi to naya bhejo
         if status_message:
             try:
                 await status_message.edit_text(
@@ -127,13 +125,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ╚══════════════════════════╝
                     """
                     keyboard = [[InlineKeyboardButton("🛑 STOP AUTO", callback_data="stop_auto")]]
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
-                            loop
-                        )
-                    except:
-                        pass
+                    asyncio.run_coroutine_threadsafe(
+                        status_message.edit_text(status_text, reply_markup=InlineKeyboardMarkup(keyboard)),
+                        loop
+                    )
         
         def send_message(text):
             asyncio.run_coroutine_threadsafe(
@@ -252,8 +247,7 @@ async def stopauto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Auto mode stopped.\nTotal checked: {auto_counter} | Valid: {valid_counter}",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        except Exception as e:
-            print(f"Error editing message: {e}")
+        except:
             # Agar edit fail ho to naya message bhejo
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
